@@ -1,0 +1,203 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]  # Trigger on PR creation and updates
+
+permissions:
+  contents: write       # For committing review.json and auto-formatting/linting
+  pull-requests: write  # For creating reviews and comments
+
+jobs:
+  gemini-code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📊 PR Info
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Pull Request Number: $PR_NUMBER"
+          echo "Repository: $REPO"
+          echo "Event type: ${{ github.event.action }}"
+          echo "PR Head SHA: ${{ github.event.pull_request.head.sha }}"
+          echo "PR Base SHA: ${{ github.event.pull_request.base.sha }}"
+
+      - name: 👀 Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed for diffing against base SHA
+
+      - name: 🐍 Set up Python and Install Dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: |
+          pip install flake8 google-generativeai PyGithub unidiff "google-ai-generativelanguage>=0.6.0" github3.py requests PyJWT cryptography
+
+      - name: 🐍 Python Syntax Check
+        run: |
+          echo "Running Python validation on .github/ and other specified .py files..."
+          set -e
+          errors=0
+          summary=""
+          py_files_to_check=$(find .github -type f -name "*.py" 2>/dev/null)
+
+          if [ -z "$py_files_to_check" ]; then
+            echo "No Python files found in specified paths to check."
+          else
+            echo "Step 1: Basic syntax check with py_compile"
+            for file in $py_files_to_check; do
+              echo "Checking $file with py_compile"
+              if ! output=$(python -m py_compile "$file" 2>&1); then
+                errors=$((errors+1)) # Increment for each file with py_compile errors
+                summary+="$file (py_compile syntax error):\n$output\n\n"
+              fi
+            done
+
+            echo "\nStep 2: Checking for AST parsing issues (e.g., f-string errors)"
+            # Reset errors for this step if you want to count them separately, or use a different counter
+            ast_errors=0
+            ast_summary=""
+            for file in $py_files_to_check; do
+              echo "Checking $file with ast.parse"
+              if ! python -c "import ast; ast.parse(open('$file', encoding='utf-8').read())" 2>&1 >/dev/null; then
+                 # Check if py_compile already flagged this file to avoid redundant general error messages
+                 # This is a heuristic, ast.parse might catch different things.
+                 if ! grep -q "$file (py_compile syntax error)" <<< "$summary"; then
+                    ast_errors=$((ast_errors+1))
+                    ast_summary+="$file (AST parsing error, e.g., f-string):\nPython's AST parser failed. Check syntax, especially f-strings.\n\n"
+                 fi
+              fi
+            done
+            if [ "$ast_errors" -gt 0 ]; then
+              summary+=$ast_summary
+              errors=$((errors + ast_errors)) # Add to total errors if counting distinctly
+            fi
+
+
+            echo "\nStep 3: Checking for critical errors with flake8"
+            flake8_errors=0
+            flake8_summary=""
+            for file in $py_files_to_check; do
+              echo "Running flake8 on $file"
+              output=$(flake8 --select=E9,F821 "$file" 2>&1)
+              if [ -n "$output" ]; then
+                # Check if similar errors already reported to avoid too much noise
+                if ! grep -q "$file" <<< "$summary"; then # Simple check
+                    flake8_errors=$((flake8_errors+1))
+                    flake8_summary+="$file (flake8 critical errors E9/F821):\n$output\n\n"
+                fi
+              fi
+            done
+            if [ "$flake8_errors" -gt 0 ]; then
+              summary+=$flake8_summary
+              errors=$((errors + flake8_errors)) # Add to total errors
+            fi
+          fi
+
+          if [ "$errors" -gt 0 ]; then # Use the master 'errors' counter
+            echo -e "\n⚠️ Issues found in Python files:\n"
+            echo -e "$summary"
+            exit 1
+          else
+            echo "\n✅ No critical issues detected in Python files."
+          fi
+
+      - name: 🧠 Run code review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_ALT_1: ${{ secrets.GEMINI_ALT_1 }}
+          GEMINI_ALT_2: ${{ secrets.GEMINI_ALT_2 }}
+          GEMINI_ALT_3: ${{ secrets.GEMINI_ALT_3 }}
+          GEMINI_ALT_4: ${{ secrets.GEMINI_ALT_4 }}
+          GEMINI_MODEL: gemini-2.5-flash-preview-05-20
+          INPUT_EXCLUDE: "*.md,*.txt,*.json,*.lock,*.yml,*.yaml,*.svg,*.png,*.jpg,*.jpeg,*.gif,*.ico,*.woff,*.woff2,*.ttf,*.eot,*.otf,*.map,*.min.js,*.min.css,reviews/gemini-pr-review.json,*.test.js,*.d.ts,vendor/**,node_modules/**,dist/**,build/**"
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_JOB: ${{ github.job }}
+          # GitHub App authentication
+          ZEN_APP_INSTALLATION_ID: ${{ secrets.ZEN_APP_INSTALLATION_ID }}
+          ZEN_APP_PRIVATE_KEY: ${{ secrets.ZEN_APP_PRIVATE_KEY }}
+        run: |
+          max_attempts=3
+          attempt=1
+          while [ $attempt -le $max_attempts ]; do
+            echo "Attempt $attempt of $max_attempts to run code review script"
+            if python .github/workflows/gemini-pr-review.py; then
+              echo "Code review script completed successfully"
+              break
+            else
+              exit_code=$?
+              echo "Code review script failed with exit code $exit_code"
+              if [ $attempt -lt $max_attempts ]; then
+                sleep_time=$((60 * attempt))
+                echo "Waiting $sleep_time seconds before retrying..."
+                sleep $sleep_time
+              else
+                echo "All attempts for code review script failed."
+                # Allow workflow to continue to commit review.json even if script failed
+                echo "Continuing workflow despite script failure after retries to commit artifacts."
+              fi
+            fi
+            attempt=$((attempt + 1))
+          done
+
+      - name: 💾 Commit review artifacts (review JSON)
+        run: |
+          export GIT_AUTHOR_NAME="zen-ai-qa[bot]"
+          export GIT_AUTHOR_EMAIL="211895442+zen-ai-qa[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="zen-ai-qa[bot]"
+          export GIT_COMMITTER_EMAIL="211895442+zen-ai-qa[bot]@users.noreply.github.com"
+
+          # Add the JSON files
+          git add reviews/*.json 2>/dev/null || true
+
+          if git diff --staged --quiet --exit-code; then
+            echo "No changes to review artifacts to commit."
+          else
+            # Use different commit messages based on whether there are comments or rate limiting
+            # Check if rate limiting was encountered
+            if [ -f "reviews/gemini-pr-review.json" ]; then
+              review_comments_count=$(jq '.review_comments | length' reviews/gemini-pr-review.json)
+              rate_limited=$(jq '.metadata.rate_limited' reviews/gemini-pr-review.json)
+
+              if [ "$review_comments_count" -gt 0 ]; then
+                if [ "$rate_limited" = "true" ]; then
+                  commit_message="👁️‍🗨️ Update Gemini PR review with $review_comments_count issues (rate limited)"
+                else
+                  commit_message="👁️‍🗨️ Update Gemini PR review with $review_comments_count issues"
+                fi
+              else
+                if [ "$rate_limited" = "true" ]; then
+                  commit_message="👁️‍🗨️ Update Gemini PR review (no issues found, rate limited)"
+                else
+                  commit_message="👁️‍🗨️ Update Gemini PR review (no issues found)"
+                fi
+              fi
+            else
+              commit_message="📊 Update review reports"
+            fi
+
+            git commit -m "$commit_message"
+
+            # Push to the PR branch. Retry push a few times in case of temporary conflict.
+            for i in 1 2 3; do
+              git pull --rebase origin ${{ github.event.pull_request.head.ref }} || true # Try to rebase before push
+              if git push origin HEAD:${{ github.event.pull_request.head.ref }}; then
+                echo "Push of review artifacts succeeded."
+                break
+              fi
+              if [ "$i" -eq 3 ]; then
+                echo "Push of review artifacts failed after multiple attempts."
+              else
+                echo "Push failed, retrying in 10s..."
+                sleep 10
+              fi
+            done
+          fi
