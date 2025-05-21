@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 import sys
 
-litellm.set_verbose = False
+# litellm.set_verbose = False # Deprecated in newer LiteLLM versions
 # litellm.telemetry = False # Optional: If you want to disable telemetry
 
 # Load environment variables from .env file
@@ -78,62 +78,35 @@ for handler in logger.handlers:
 app = FastAPI()
 
 # Get API keys from environment
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 
-if not GEMINI_API_KEY:
-    logger.error("🔴 GEMINI_API_KEY not found in environment variables. Please set it.")
-    # Potentially exit or raise a more severe error if running the server without it is not an option.
+if not OPENAI_API_KEY:
+    logger.error("🔴 OPENAI_API_KEY not found in environment variables. Please set it.")
     # sys.exit(1)
 
+# Preferred provider is now always OpenAI
+PREFERRED_PROVIDER = "openai"
 
-# Preferred provider is now always Google/Gemini
-PREFERRED_PROVIDER = "google"
-
-# Get model mapping configuration from environment
-# Default to latest Gemini models if not set
-DEFAULT_BIG_GEMINI_MODEL = "gemini-1.5-pro-latest"
-DEFAULT_SMALL_GEMINI_MODEL = "gemini-1.5-flash-latest"
-BIG_MODEL = os.environ.get("BIG_MODEL", DEFAULT_BIG_GEMINI_MODEL) # Updated default
-SMALL_MODEL = os.environ.get("SMALL_MODEL", DEFAULT_SMALL_GEMINI_MODEL) # Updated default
-
-# List of Gemini models - ensure BIG_MODEL and SMALL_MODEL are in this list if not using aliases
-GEMINI_MODELS = [
-    "gemini-1.5-pro-latest",
-    "gemini-1.5-pro-preview-0514", # Example, keep this updated
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-flash-preview-0514", # Example
-    "gemini-pro", # Older model, still useful
-    "gemini-2.5-pro-preview-05-06", # From original code
-    "gemini-2.5-flash-preview-04-17" # From original code
-]
-# Ensure BIG_MODEL and SMALL_MODEL from environment are added if they are full Gemini names
-if BIG_MODEL not in GEMINI_MODELS and BIG_MODEL.startswith("gemini"):
-    GEMINI_MODELS.append(BIG_MODEL)
-if SMALL_MODEL not in GEMINI_MODELS and SMALL_MODEL.startswith("gemini"):
-    GEMINI_MODELS.append(SMALL_MODEL)
+# These are no longer used for model mapping, but can be kept for other purposes if needed.
+# For this plan, we will remove their explicit use in model mapping.
+# DEFAULT_BIG_MODEL = "gpt-4o"
+# DEFAULT_SMALL_MODEL = "gpt-3.5-turbo"
+# BIG_MODEL = os.environ.get("BIG_MODEL", DEFAULT_BIG_MODEL)
+# SMALL_MODEL = os.environ.get("SMALL_MODEL", DEFAULT_SMALL_MODEL)
 
 
-# Helper function to clean schema for Gemini
-def clean_gemini_schema(schema: Any) -> Any:
-    """Recursively removes unsupported fields from a JSON schema for Gemini."""
+# Helper function to clean schema for OpenAI (removed Gemini specific cleaning)
+# OpenAI's tool schema is generally more permissive, so this function can be simplified or removed.
+def clean_openai_schema(schema: Any) -> Any:
+    """Recursively removes unsupported fields from a JSON schema for OpenAI."""
     if isinstance(schema, dict):
-        # Remove specific keys unsupported by Gemini tool parameters
-        schema.pop("additionalProperties", None)
-        schema.pop("default", None)
-
-        # Check for unsupported 'format' in string types
-        if schema.get("type") == "string" and "format" in schema:
-            allowed_formats = {"enum", "date-time"} # Gemini might support more, this is a safe subset
-            if schema["format"] not in allowed_formats:
-                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini schema.")
-                schema.pop("format")
-
-        # Recursively clean nested schemas (properties, items, etc.)
-        for key, value in list(schema.items()): # Use list() to allow modification during iteration
-            schema[key] = clean_gemini_schema(value)
+        # OpenAI generally supports 'additionalProperties' and 'default', so no need to remove them.
+        # If specific unsupported fields are found for OpenAI, add them here.
+        for key, value in list(schema.items()):
+            schema[key] = clean_openai_schema(value)
     elif isinstance(schema, list):
-        # Recursively clean items in a list
-        return [clean_gemini_schema(item) for item in schema]
+        return [clean_openai_schema(item) for item in schema]
     return schema
 
 # Models for Anthropic API requests (kept for API compatibility)
@@ -193,63 +166,18 @@ class MessagesRequest(BaseModel):
         original_model = v
         new_model = v # Default to original value
 
-        logger.debug(f"📋 MODEL VALIDATION (GEMINI-ONLY): Original='{original_model}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 MODEL VALIDATION (OPENAI-PROXY): Original='{original_model}'")
 
-        clean_v = v
-        if clean_v.startswith('gemini/'):
-            clean_v = clean_v[7:]
-        # Remove other prefixes if they somehow sneak in, though they shouldn't
-        elif clean_v.startswith('anthropic/'): clean_v = clean_v[10:]
-        elif clean_v.startswith('openai/'): clean_v = clean_v[7:]
-
-
-        mapped = False
-        # Map Haiku to SMALL_MODEL (must be a Gemini model)
-        if 'haiku' in clean_v.lower():
-            if SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                logger.warning(f"⚠️ SMALL_MODEL ('{SMALL_MODEL}') is not a recognized Gemini model. Using original: '{original_model}'")
-                # Fallback to a default known small Gemini or error
-                new_model = f"gemini/{DEFAULT_SMALL_GEMINI_MODEL}" # Fallback
-                mapped = True
-
-
-        # Map Sonnet to BIG_MODEL (must be a Gemini model)
-        elif 'sonnet' in clean_v.lower():
-            if BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                logger.warning(f"⚠️ BIG_MODEL ('{BIG_MODEL}') is not a recognized Gemini model. Using original: '{original_model}'")
-                # Fallback to a default known big Gemini or error
-                new_model = f"gemini/{DEFAULT_BIG_GEMINI_MODEL}" # Fallback
-                mapped = True
-
-        # Add 'gemini/' prefix if a known Gemini model is provided without it
-        elif not mapped and clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
-            new_model = f"gemini/{clean_v}"
-            mapped = True
-
-        if mapped:
-            logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
-        elif not v.startswith('gemini/'):
-            logger.warning(f"⚠️ Model '{original_model}' is not a recognized Gemini model or alias, and does not start with 'gemini/'. Attempting to use as 'gemini/{v}'.")
-            new_model = f"gemini/{v}" # Attempt to prefix
-        else: # Already has gemini/ prefix, or wasn't mapped and we use as is
-            new_model = v
-
+        # Ensure the model is prefixed with 'openai/' for LiteLLM
+        if not v.startswith('openai/'):
+            new_model = f"openai/{v}"
+            logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}' (added 'openai/' prefix)")
+        else:
+            new_model = v # Already has openai/ prefix
 
         values = info.data
         if isinstance(values, dict):
             values['original_model'] = original_model
-
-        # Final check if new_model is actually a gemini model
-        if not new_model.startswith("gemini/"):
-             logger.error(f"🚨 CRITICAL: Model '{new_model}' after validation is not a Gemini model. Defaulting to {DEFAULT_SMALL_GEMINI_MODEL}.")
-             new_model = f"gemini/{DEFAULT_SMALL_GEMINI_MODEL}"
-
 
         return new_model
 
@@ -265,17 +193,19 @@ class TokenCountRequest(BaseModel):
     @field_validator('model')
     def validate_model_token_count(cls, v, info):
         # Reuse the same validation logic from MessagesRequest
-        # This is a bit of a hack for Pydantic v2; ideally, this would be a shared utility
-        temp_request_data = {'model': v, 'max_tokens': 0, 'messages': []} # Dummy data
-        validated_model = MessagesRequest.model_fields['model'].get_validators()[0](v, info) # Access validator
-        # validated_model = MessagesRequest.validate_model_field(v, info) # This might not work directly if context is different
-
-        # Store the original model in the values dictionary
+        # Reuse the model validation logic from MessagesRequest directly
+        # The field_validator automatically handles the context (info)
+        # We just need to ensure the logic is applied.
+        # The 'v' (model name) will be prefixed with 'openai/' if not already.
+        new_model = v
+        if not v.startswith('openai/'):
+            new_model = f"openai/{v}"
+        
         values = info.data
         if isinstance(values, dict):
-            values['original_model'] = v # original v before validation
+            values['original_model'] = v # Store the original model name
 
-        return validated_model
+        return new_model
 
 
 class TokenCountResponse(BaseModel):
@@ -462,16 +392,20 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
             litellm_messages.extend(pending_tool_role_messages)
 
         elif anthropic_msg.role == "assistant":
-            assistant_litellm_msg = {"role": "assistant"}
+            assistant_litellm_msg: Dict[str, Any] = {"role": "assistant"}
             
             # Content (text/image) for assistant
-            assistant_content_actual = []
+            assistant_content_actual: List[Dict[str, Any]] = []
             if final_text_str:
                 assistant_content_actual.append({"type": "text", "text": final_text_str})
             assistant_content_actual.extend(current_msg_image_parts)
 
             if assistant_content_actual:
-                 assistant_litellm_msg["content"] = assistant_content_actual[0]["text"] if len(assistant_content_actual) == 1 and assistant_content_actual[0]["type"] == "text" else assistant_content_actual
+                 # LiteLLM expects content to be a string or a list of content blocks
+                 if len(assistant_content_actual) == 1 and assistant_content_actual[0]["type"] == "text":
+                     assistant_litellm_msg["content"] = assistant_content_actual[0]["text"]
+                 else:
+                     assistant_litellm_msg["content"] = assistant_content_actual
             else:
                 assistant_litellm_msg["content"] = None # Crucial: can be null if only tool_calls
 
@@ -480,7 +414,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                 assistant_litellm_msg["tool_calls"] = current_msg_assistant_tool_calls
             
             # Only add the assistant message if it has text, images, or tool_calls
-            if assistant_litellm_msg.get("content") or assistant_litellm_msg.get("tool_calls"):
+            if assistant_litellm_msg.get("content") is not None or assistant_litellm_msg.get("tool_calls"):
                 litellm_messages.append(assistant_litellm_msg)
     
     # --- Construct the final request dictionary for LiteLLM ---
@@ -500,12 +434,12 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         litellm_request_dict["top_k"] = anthropic_request.top_k
 
     if anthropic_request.tools:
-        gemini_tools = []
+        openai_tools = []
         for tool_obj in anthropic_request.tools:
             tool_dict = tool_obj.dict() # Use .model_dump() if Pydantic v2
             input_schema = tool_dict.get("input_schema", {})
-            cleaned_schema = clean_gemini_schema(input_schema) # Your existing schema cleaner
-            gemini_tools.append({
+            cleaned_schema = clean_openai_schema(input_schema) # Use OpenAI schema cleaner
+            openai_tools.append({
                 "type": "function",
                 "function": {
                     "name": tool_dict["name"],
@@ -513,7 +447,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                     "parameters": cleaned_schema
                 }
             })
-        litellm_request_dict["tools"] = gemini_tools
+        litellm_request_dict["tools"] = openai_tools
 
     if anthropic_request.tool_choice:
         # Your existing tool_choice conversion logic
@@ -540,39 +474,69 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
         completion_tokens = 0
 
         # Handle ModelResponse object from LiteLLM
+        # Unified parsing logic for LiteLLM response (ModelResponse object or dict)
+        _choices = []
+        _message = {}
+        _content_text = ""
+        _tool_calls = None
+        _finish_reason = "end_turn"
+        _prompt_tokens = 0
+        _completion_tokens = 0
+        _response_id = response_id # Use the default generated ID
+
         if hasattr(litellm_response, 'choices') and hasattr(litellm_response, 'usage'):
-            choices = litellm_response.choices
-            message = choices[0].message if choices and len(choices) > 0 else None
-            content_text = message.content if message and hasattr(message, 'content') else ""
-            tool_calls = message.tool_calls if message and hasattr(message, 'tool_calls') else None
-            finish_reason = choices[0].finish_reason if choices and len(choices) > 0 else "stop"
-            usage_info = litellm_response.usage
-            prompt_tokens = getattr(usage_info, "prompt_tokens", 0)
-            completion_tokens = getattr(usage_info, "completion_tokens", 0)
-            response_id = getattr(litellm_response, 'id', response_id)
-        elif isinstance(litellm_response, dict): # Handle dict response
-            choices = litellm_response.get("choices", [{}])
-            message = choices[0].get("message", {}) if choices and len(choices) > 0 else {}
-            content_text = message.get("content", "")
-            tool_calls = message.get("tool_calls", None)
-            finish_reason = choices[0].get("finish_reason", "stop") if choices and len(choices) > 0 else "stop"
-            usage_info = litellm_response.get("usage", {})
-            prompt_tokens = usage_info.get("prompt_tokens", 0)
-            completion_tokens = usage_info.get("completion_tokens", 0)
-            response_id = litellm_response.get("id", response_id)
-        else: # Fallback for unexpected response type
-             logger.error(f"Unexpected LiteLLM response type: {type(litellm_response)}. Attempting to parse.")
-             if hasattr(litellm_response, '__dict__'):
-                 response_dict = litellm_response.__dict__
-                 choices = response_dict.get("choices", [{}])
-                 message = choices[0].get("message", {}) if choices and len(choices) > 0 else {}
-                 content_text = message.get("content", "")
-                 tool_calls = message.get("tool_calls", None)
-                 # ... (continue extracting other fields)
-             else:
+            # It's a LiteLLM ModelResponse object
+            # It's a LiteLLM ModelResponse object, access attributes safely
+            _choices = getattr(litellm_response, 'choices', [])
+            _message = getattr(_choices[0], 'message', None) if _choices else None
+            _content_text = getattr(_message, 'content', "") if _message else ""
+            _tool_calls = getattr(_message, 'tool_calls', None) if _message else None
+            _finish_reason = getattr(_choices[0], 'finish_reason', "stop") if _choices else "stop"
+            _usage_info = getattr(litellm_response, 'usage', None) # usage is directly on ModelResponse
+            _prompt_tokens = getattr(_usage_info, "prompt_tokens", 0) if _usage_info else 0
+            _completion_tokens = getattr(_usage_info, "completion_tokens", 0) if _usage_info else 0
+            _response_id = getattr(litellm_response, 'id', response_id)
+        elif isinstance(litellm_response, dict):
+            # It's a dictionary (e.g., from json.loads or direct dict response)
+            _choices = litellm_response.get("choices", [{}])
+            _message = _choices[0].get("message", {}) if _choices and len(_choices) > 0 else {}
+            _content_text = _message.get("content", "")
+            _tool_calls = _message.get("tool_calls", None)
+            _finish_reason = _choices[0].get("finish_reason", "stop") if _choices and len(_choices) > 0 else "stop"
+            _usage_info = litellm_response.get("usage", {})
+            _prompt_tokens = _usage_info.get("prompt_tokens", 0)
+            _completion_tokens = _usage_info.get("completion_tokens", 0)
+            _response_id = litellm_response.get("id", response_id)
+        else:
+            logger.error(f"Unexpected LiteLLM response type: {type(litellm_response)}. Attempting to convert to dict.")
+            try:
+                if isinstance(litellm_response, BaseModel):
+                    response_dict = litellm_response.model_dump()
+                elif hasattr(litellm_response, '__dict__'):
+                    response_dict = litellm_response.__dict__
+                else:
+                    response_dict = {}
+
+                _choices = response_dict.get("choices", [{}])
+                _message = _choices[0].get("message", {}) if _choices and len(_choices) > 0 else {}
+                _content_text = _message.get("content", "")
+                _tool_calls = _message.get("tool_calls", None)
+                _finish_reason = _choices[0].get("finish_reason", "stop") if _choices and len(_choices) > 0 else "stop"
+                _usage_info = response_dict.get("usage", {})
+                _prompt_tokens = _usage_info.get("prompt_tokens", 0)
+                _completion_tokens = _usage_info.get("completion_tokens", 0)
+                _response_id = response_dict.get("id", response_id)
+            except Exception as convert_e:
+                logger.error(f"Failed to convert LiteLLM response to dict: {convert_e}")
                 raise ValueError("LiteLLM response is not a recognized object or dictionary.")
 
-
+        # Assign extracted values to the variables used later in the function
+        content_text = _content_text
+        tool_calls = _tool_calls
+        finish_reason = _finish_reason
+        prompt_tokens = _prompt_tokens
+        completion_tokens = _completion_tokens
+        response_id = _response_id
         content_blocks = []
         if content_text is not None and content_text.strip() != "":
             content_blocks.append(ContentBlockText(type="text", text=content_text))
@@ -590,14 +554,14 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
                 arguments_str = "{}"
 
                 if isinstance(tool_call_item, dict):
-                    tool_id = tool_call_item.get("id", f"tool_{uuid.uuid4()}")
+                    tool_id = tool_call_item.get("id", f"tool_{uuid.uuid4()}") or f"tool_{uuid.uuid4()}"
                     function_data = tool_call_item.get("function", {})
-                    name = function_data.get("name", "")
-                    arguments_str = function_data.get("arguments", "{}")
+                    name = function_data.get("name", "") or ""
+                    arguments_str = function_data.get("arguments", "{}") or "{}"
                 elif hasattr(tool_call_item, "id") and hasattr(tool_call_item, "function"): # If it's an object
-                    tool_id = tool_call_item.id
-                    name = tool_call_item.function.name
-                    arguments_str = tool_call_item.function.arguments
+                    tool_id = tool_call_item.id or f"tool_{uuid.uuid4()}"
+                    name = tool_call_item.function.name or ""
+                    arguments_str = tool_call_item.function.arguments or "{}"
                 else:
                     logger.warning(f"Skipping malformed tool_call_item: {tool_call_item}")
                     continue
@@ -830,8 +794,8 @@ async def create_message(
         logger.debug(f"📊 PROCESSING REQUEST: Original Model='{request.original_model}', Effective Model='{request.model}', Stream={request.stream}")
 
         litellm_request = convert_anthropic_to_litellm(request)
-        litellm_request["api_key"] = GEMINI_API_KEY
-        logger.debug(f"Using Gemini API key for model: {request.model}")
+        litellm_request["api_key"] = OPENAI_API_KEY
+        logger.debug(f"Using OpenAI API key for model: {request.model}")
 
 
         # Log the LiteLLM request (be careful with sensitive data in production)
@@ -871,15 +835,42 @@ async def create_message(
         logger.error(f"LiteLLM APIError: Status Code: {e.status_code}, Message: {e.message}, LLM Provider: {e.llm_provider}, Model: {e.model}")
         import traceback
         logger.error(traceback.format_exc())
-        # Try to get more details if available in e.response
+        # Try to get more details from the error object
         error_detail_msg = str(e.message)
-        if hasattr(e, 'response') and hasattr(e.response, 'text'):
-             try:
-                response_json = json.loads(e.response.text)
-                if 'error' in response_json and 'message' in response_json['error']:
-                    error_detail_msg = response_json['error']['message']
-             except:
-                error_detail_msg = e.response.text[:500] # Truncate if too long
+        # LiteLLM's APIError might have a 'response' attribute, but it's not always guaranteed
+        # and its structure can vary. Access it carefully.
+        response_obj = getattr(e, 'response', None) # Safely get the response object
+        if response_obj is not None:
+            try:
+                response_text = None
+                response_json = None
+
+                # Attempt to get text from response_obj if it's an httpx.Response-like object
+                if hasattr(response_obj, 'text'):
+                    if callable(getattr(response_obj, 'text', None)):
+                        response_text = await response_obj.text()
+                    else:
+                        response_text = response_obj.text
+                
+                if response_text:
+                    response_json = json.loads(response_text)
+                elif isinstance(response_obj, dict):
+                    response_json = response_obj # If it's already a dict, use it directly
+                else:
+                    logger.warning(f"LiteLLM APIError response object has unexpected type: {type(response_obj)}")
+                    response_json = {} # Default to empty dict if not parsable
+
+                if response_json: # Now check if response_json was successfully populated
+                    if 'error' in response_json and 'message' in response_json['error']:
+                        error_detail_msg = response_json['error']['message']
+                    elif 'detail' in response_json:
+                        error_detail_msg = response_json['detail']
+                else: # Fallback if no parsable JSON
+                    error_detail_msg = str(response_obj)[:500] # Fallback to string representation of response_obj
+
+            except Exception as parse_e:
+                logger.warning(f"Could not parse LiteLLM APIError response: {parse_e}")
+                error_detail_msg = str(e.message)[:500] # Fallback to string representation of e.message
 
         raise HTTPException(status_code=e.status_code or 500, detail=f"LLM Provider Error ({e.llm_provider} - {e.model}): {error_detail_msg}")
 
@@ -931,12 +922,16 @@ async def count_tokens(
             len(litellm_formatted_parts['messages']), num_tools, 200
         )
 
-        token_count = litellm.token_counter(
+        # Use litellm.completion with mock_response=True for token counting
+        # This is the recommended way to get token counts without making an actual API call.
+        # It returns a ModelResponse object which includes usage.
+        mock_response = await litellm.acompletion(
             model=litellm_formatted_parts["model"],
             messages=litellm_formatted_parts["messages"],
-            # LiteLLM's token_counter might also accept 'tools' directly for some models
-            # tools=litellm_formatted_parts.get("tools") # If supported
+            tools=litellm_formatted_parts.get("tools"), # Pass tools if present
+            mock_response=True
         )
+        token_count = getattr(getattr(mock_response, "usage", None), "prompt_tokens", 0)
         return TokenCountResponse(input_tokens=token_count)
 
     except Exception as e:
@@ -953,10 +948,10 @@ class Colors:
     RED = "\033[91m"; MAGENTA = "\033[95m"; RESET = "\033[0m"; BOLD = "\033[1m"
     UNDERLINE = "\033[4m"; DIM = "\033[2m"
 
-def log_request_beautifully(method, path, requested_model, gemini_model_used, num_messages, num_tools, status_code):
-    """Log requests, showing mapping from requested model to the actual Gemini model used."""
+def log_request_beautifully(method, path, requested_model, litellm_model_used, num_messages, num_tools, status_code):
+    """Log requests, showing mapping from requested model to the actual LiteLLM model used."""
     req_display = f"{Colors.CYAN}{requested_model}{Colors.RESET}"
-    gemini_display = f"{Colors.GREEN}{gemini_model_used.replace('gemini/', '')}{Colors.RESET}" # Show clean name
+    litellm_display = f"{Colors.GREEN}{litellm_model_used}{Colors.RESET}" # Show the model name LiteLLM uses
 
     endpoint = path.split("?")[0] if "?" in path else path
     tools_str = f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
@@ -964,7 +959,7 @@ def log_request_beautifully(method, path, requested_model, gemini_model_used, nu
     status_str = f"{Colors.GREEN}✓ {status_code} OK{Colors.RESET}" if status_code == 200 else f"{Colors.RED}✗ {status_code}{Colors.RESET}"
 
     log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-    model_line = f"Request: {req_display} → Gemini: {gemini_display} ({tools_str}, {messages_str})"
+    model_line = f"Request: {req_display} → LiteLLM: {litellm_display} ({tools_str}, {messages_str})"
 
     print(log_line); print(model_line); sys.stdout.flush()
 
@@ -976,12 +971,14 @@ def main():
         print("Optional .env vars: BIG_MODEL (default gemini-1.5-pro-latest), SMALL_MODEL (default gemini-1.5-flash-latest)")
         sys.exit(0)
 
-    if not GEMINI_API_KEY:
-        print("🔴 FATAL: GEMINI_API_KEY is not set. Please set it in your environment or .env file.")
+    if not OPENAI_API_KEY:
+        print("🔴 FATAL: OPENAI_API_KEY is not set. Please set it in your environment or .env file.")
         print("If you have a .env file, ensure it's in the same directory or loaded correctly.")
         sys.exit(1)
     else:
-        print(f"✅ GEMINI_API_KEY loaded. BIG_MODEL='{BIG_MODEL}', SMALL_MODEL='{SMALL_MODEL}'")
+        print(f"✅ OPENAI_API_KEY loaded.")
+        if OPENAI_BASE_URL:
+            print(f"✅ OPENAI_BASE_URL set to: {OPENAI_BASE_URL}")
 
 
     uvicorn.run(app, host="0.0.0.0", port=8082, log_level="warning") # uvicorn log_level
