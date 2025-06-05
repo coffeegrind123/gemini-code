@@ -1,40 +1,70 @@
-# Gemini for Claude Code: An Anthropic-Compatible Proxy
+# Gemini & Vertex AI for Claude Code: An Anthropic-Compatible Proxy
 
-This server acts as a bridge, enabling you to use **Claude Code** with Google's powerful **Gemini models**. It translates API requests and responses between the Anthropic format (used by Claude Code) and the Gemini format (via LiteLLM), allowing seamless integration.
+This server acts as a bridge, enabling you to use **Claude Code** with Google's powerful **Gemini** and **Vertex AI** models. It translates API requests and responses between the Anthropic format (used by Claude Code) and Google's formats (via LiteLLM), allowing seamless integration with both Google AI Studio and Google Cloud Vertex AI.
 
 ![Claude Code with Gemini Proxy](image.png)
 
 ## Features
 
-- **Claude Code Compatibility with Gemini**: Directly use the Claude Code CLI with Google Gemini models.
-- **Seamless Model Mapping**: Intelligently maps Claude Code model requests (e.g., `haiku`, `sonnet`, `opus` aliases) to your chosen Gemini models.
-- **LiteLLM Integration**: Leverages LiteLLM for robust and flexible interaction with the Gemini API.
-- **Enhanced Streaming Support**: Handles streaming responses from Gemini with robust error recovery for malformed chunks and API errors.
-- **Complete Tool Use for Claude Code**: Translates Claude Code's tool usage (function calling) to and from Gemini's format, with robust handling of tool results.
-- **Advanced Error Handling**: Provides specific and actionable error messages for common Gemini API issues with automatic fallback strategies.
-- **Resilient Architecture**: Gracefully handles Gemini API instability with smart retry logic and fallback to non-streaming modes.
+- **Claude Code Compatibility**: Directly use the Claude Code CLI with Google Gemini and Vertex AI models.
+- **Dual Provider Support**: Choose between Google AI Studio (Gemini) or Google Cloud Vertex AI based on your needs.
+- **Seamless Model Mapping**: Intelligently maps Claude Code model requests (e.g., `haiku`, `sonnet`, `opus` aliases) to your chosen Google models.
+- **Enterprise Ready**: Full Vertex AI support with service account authentication and project isolation.
+- **LiteLLM Integration**: Leverages LiteLLM for robust and flexible interaction with Google's APIs.
+- **Enhanced Streaming Support**: Handles streaming responses with robust error recovery, timeout handling, and keep-alive pings.
+- **Complete Tool Use for Claude Code**: Translates Claude Code's tool usage (function calling) to and from Google's format, with robust handling of tool results.
+- **Advanced Error Handling**: Provides specific and actionable error messages for common API issues with automatic fallback strategies.
+- **Resilient Architecture**: Gracefully handles API instability with smart retry logic and fallback to non-streaming modes.
 - **Diagnostic Endpoints**: Includes `/health` and `/test-connection` for easier troubleshooting of your setup.
 - **Token Counting**: Offers a `/v1/messages/count_tokens` endpoint compatible with Claude Code.
 
-## Recent Improvements (v2.5.0)
+## Recent Improvements (v2.7.0)
+
+### 🔵 Vertex AI Enterprise Support
+- **Full Vertex AI Integration**: Complete support for Google Cloud Vertex AI with project isolation
+- **Service Account Authentication**: Support for both ADC and service account credentials
+- **Multi-Region Support**: Configure your preferred Vertex AI location (us-central1, europe-west1, etc.)
+- **Provider Selection**: Choose between Google AI Studio (gemini) or Vertex AI (vertex) as your preferred provider
+
+### ⏰ Enhanced Timeout Handling
+- **Keep-Alive Pings**: Automatic ping messages every 30 seconds during streaming to prevent timeouts
+- **Extended Timeouts**: 10-minute request timeouts for long conversations and complex tasks
+- **Connection Stability**: Improved handling of long-running requests and network interruptions
+- **Streaming Headers**: Enhanced headers to prevent proxy buffering issues
 
 ### 🛡️ Enhanced Error Resilience
-- **Malformed Chunk Recovery**: Automatically detects and handles malformed JSON chunks from Gemini streaming
+- **Malformed Chunk Recovery**: Automatically detects and handles malformed JSON chunks from streaming
 - **Smart Retry Logic**: Exponential backoff with configurable retry limits for streaming errors
 - **Graceful Fallback**: Seamlessly switches to non-streaming mode when streaming fails
 - **Buffer Management**: Intelligent chunk buffering and reconstruction for incomplete JSON
-- **Connection Stability**: Handles Gemini 500 Internal Server Errors with automatic retry
+- **Connection Stability**: Handles API 500 Internal Server Errors with automatic retry
 
 ### 📊 Improved Monitoring
-- **Detailed Error Classification**: Specific guidance for different types of Gemini API errors
-- **Enhanced Logging**: Comprehensive error tracking with malformed chunk statistics
-- **Real-time Status**: Better health checks and connection testing
+- **Multi-Provider Status**: Health checks for both Gemini and Vertex AI configurations
+- **Detailed Error Classification**: Specific guidance for different types of API errors
+- **Enhanced Logging**: Comprehensive error tracking with provider-specific indicators
+- **Real-time Diagnostics**: Better connection testing for both providers
 
 ## Prerequisites
 
-- A Google Gemini API key.
-- Python 3.8+.
-- Claude Code CLI installed (e.g., `npm install -g @anthropic-ai/claude-code`).
+- A Google AI Studio API key (for Gemini) **OR** Google Cloud Project with Vertex AI enabled
+- Python 3.8+
+- Claude Code CLI installed (e.g., `npm install -g @anthropic-ai/claude-code`)
+
+## Provider Options
+
+### Option 1: Google AI Studio (Gemini) - Recommended for Individual Use
+- **Setup**: Just need a Gemini API key from [Google AI Studio](https://aistudio.google.com)
+- **Cost**: Pay-per-use pricing
+- **Models**: Latest Gemini models with immediate availability
+- **Ideal for**: Individual developers, personal projects, quick setup
+
+### Option 2: Google Cloud Vertex AI - Recommended for Enterprise
+- **Setup**: Requires Google Cloud Project with Vertex AI API enabled
+- **Cost**: Enterprise pricing with committed use discounts available
+- **Models**: Enterprise-grade Gemini models with enhanced security
+- **Features**: Project isolation, VPC networking, audit logging, compliance certifications
+- **Ideal for**: Businesses, teams, production workloads
 
 ## Setup
 
@@ -60,48 +90,74 @@ This server acts as a bridge, enabling you to use **Claude Code** with Google's 
     ```bash
     cp .env.example .env
     ```
-    Edit `.env` and add your Gemini API key. You can also customize model mappings and server settings:
-    ```dotenv
-    # Required: Your Google AI Studio API key
-    GEMINI_API_KEY="your-google-ai-studio-key"
 
-    # Optional: Model mappings for Claude Code aliases
-    BIG_MODEL="gemini-1.5-pro-latest"    # For 'sonnet' or 'opus' requests
-    SMALL_MODEL="gemini-1.5-flash-latest" # For 'haiku' requests
-    
-    # Optional: Server settings
-    HOST="0.0.0.0"
-    PORT="8082"
-    LOG_LEVEL="WARNING"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
-    
-    # Optional: Performance and reliability settings
-    MAX_TOKENS_LIMIT="8192"           # Max tokens for Gemini responses
-    REQUEST_TIMEOUT="90"              # Request timeout in seconds
-    MAX_RETRIES="2"                   # LiteLLM retries to Gemini
-    MAX_STREAMING_RETRIES="12"         # Streaming-specific retry attempts
-    
-    # Optional: Streaming control (use if experiencing issues)
-    FORCE_DISABLE_STREAMING="false"     # Disable streaming globally
-    EMERGENCY_DISABLE_STREAMING="false" # Emergency streaming disable
-    ```
+### For Google AI Studio (Gemini) Setup:
+Edit `.env` and add your Gemini API key:
+```dotenv
+# Required: Your Google AI Studio API key
+GEMINI_API_KEY="your-google-ai-studio-key"
+
+# Use Gemini as default provider
+PREFERRED_PROVIDER="gemini"
+```
+
+### For Vertex AI Setup:
+Edit `.env` and configure Vertex AI:
+```dotenv
+# Required: Your Google AI Studio API key (still needed as fallback)
+GEMINI_API_KEY="your-google-ai-studio-key"
+
+# Vertex AI Configuration
+VERTEX_PROJECT_ID="your-gcp-project-id"
+VERTEX_LOCATION="us-central1"
+GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"  # Optional if using ADC
+
+# Use Vertex AI as preferred provider
+PREFERRED_PROVIDER="vertex"
+```
+
+**Vertex AI Authentication Options:**
+- **Service Account**: Set `GOOGLE_APPLICATION_CREDENTIALS` to path of service account JSON
+- **Application Default Credentials (ADC)**: Run `gcloud auth application-default login` and leave `GOOGLE_APPLICATION_CREDENTIALS` empty
+
+### Additional Configuration Options:
+```dotenv
+# Optional: Model mappings for Claude Code aliases
+BIG_MODEL="gemini-1.5-pro-latest"    # For 'sonnet' or 'opus' requests
+SMALL_MODEL="gemini-1.5-flash-latest" # For 'haiku' requests
+
+# Optional: Server settings
+HOST="0.0.0.0"
+PORT="8082"
+LOG_LEVEL="WARNING"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# Optional: Performance and reliability settings
+MAX_TOKENS_LIMIT="8192"           # Max tokens for responses
+REQUEST_TIMEOUT="90"              # Request timeout in seconds
+MAX_RETRIES="2"                   # LiteLLM retries to API
+MAX_STREAMING_RETRIES="12"        # Streaming-specific retry attempts
+
+# Optional: Streaming control (use if experiencing issues)
+FORCE_DISABLE_STREAMING="false"     # Disable streaming globally
+EMERGENCY_DISABLE_STREAMING="false" # Emergency streaming disable
+```
 
 5.  **Run the server**:
-    The `server.py` script includes a `main()` function that starts the Uvicorn server:
     ```bash
     python server.py
     ```
-    For development with auto-reload (restarts when you save changes to `server.py`):
+    For development with auto-reload:
     ```bash
     uvicorn server:app --host 0.0.0.0 --port 8082 --reload
     ```
-    You can view all startup options, including configurable environment variables, by running:
+    View all startup options:
     ```bash
     python server.py --help
     ```
 
 ## Usage with Claude Code
 
-1.  **Start the Proxy Server**: Ensure the Gemini proxy server (this application) is running (see step 5 above).
+1.  **Start the Proxy Server**: Ensure the proxy server is running (see step 5 above).
 
 2.  **Configure Claude Code to Use the Proxy**:
     Set the `ANTHROPIC_BASE_URL` environment variable when running Claude Code:
@@ -110,70 +166,91 @@ This server acts as a bridge, enabling you to use **Claude Code** with Google's 
     ```
     Replace `localhost:8082` if your proxy is running on a different host or port.
 
-3.  **Utilize `CLAUDE.md` for Optimal Gemini Performance (Crucial)**:
-    - This repository includes a `CLAUDE.md` file. This file contains specific instructions and best practices tailored to help **Gemini** effectively understand and respond to **Claude Code's** unique command structure, tool usage patterns, and desired output formats.
-    - **Copy `CLAUDE.md` into your project directory**:
-      ```bash
-      cp /path/to/gemini-code/CLAUDE.md /your/project/directory/
-      ```
-    - When Claude Code starts in a directory containing `CLAUDE.md`, it automatically reads this file and incorporates its content into the system prompt. This is essential for guiding Gemini to work optimally within the Claude Code environment.
+3.  **Utilize `CLAUDE.md` for Optimal Performance**:
+    - Copy the included `CLAUDE.md` file to your project directory
+    - Claude Code automatically reads this file and incorporates its guidance
+    - Essential for optimal Google model performance with Claude Code workflows
 
-## How It Works: Powering Claude Code with Gemini
+## How It Works: Powering Claude Code with Google Models
 
 1.  **Claude Code Request**: You issue a command or prompt in the Claude Code CLI.
-2.  **Anthropic Format**: Claude Code sends an API request (in Anthropic's Messages API format) to the proxy server's address (`http://localhost:8082`).
-3.  **Proxy Translation (Anthropic to Gemini)**: The proxy server:
-    *   Receives the Anthropic-formatted request.
-    *   Validates it and maps any Claude model aliases (like `claude-3-sonnet...`) to the corresponding Gemini model specified in your `.env` (e.g., `gemini-1.5-pro-latest`).
-    *   Translates the message structure, content blocks, and tool definitions into a format LiteLLM can use with the Gemini API.
-4.  **LiteLLM to Gemini**: LiteLLM sends the prepared request to the target Gemini model using your `GEMINI_API_KEY`.
-5.  **Gemini Response**: Gemini processes the request and sends its response back through LiteLLM.
-6.  **Proxy Translation (Gemini to Anthropic)**: The proxy server:
-    *   Receives the Gemini response from LiteLLM (this can be a stream of events or a complete JSON object).
-    *   Handles streaming errors and malformed chunks with intelligent recovery.
-    *   Converts Gemini's output (text, tool calls, stop reasons) back into the Anthropic Messages API format that Claude Code expects.
-7.  **Response to Claude Code**: The proxy sends the Anthropic-formatted response back to your Claude Code client, which then displays the result or performs the requested action.
+2.  **Anthropic Format**: Claude Code sends an API request (in Anthropic's Messages API format) to the proxy server.
+3.  **Proxy Translation (Anthropic to Google)**: The proxy server:
+    *   Receives the Anthropic-formatted request
+    *   Maps Claude model aliases to your configured Google models
+    *   Translates message structure, content blocks, and tool definitions
+    *   Routes to either Gemini (Google AI Studio) or Vertex AI based on your preference
+4.  **Google API Interaction**: LiteLLM sends the request to your chosen Google service
+5.  **Google Response**: The Google model processes the request and returns the response
+6.  **Proxy Translation (Google to Anthropic)**: The proxy server:
+    *   Handles streaming responses with timeout protection and keep-alive pings
+    *   Recovers from malformed chunks and API errors automatically
+    *   Converts Google's output back to Anthropic Messages API format
+7.  **Response to Claude Code**: Claude Code receives the properly formatted response
 
 ## Model Mapping for Claude Code
 
-To ensure Claude Code's model requests are handled correctly by Gemini:
+The proxy intelligently maps Claude Code requests to Google models:
 
-- Requests from Claude Code for model names containing **"haiku"** (e.g., `claude-3-haiku-20240307`) are mapped to the Gemini model specified by your `SMALL_MODEL` environment variable (default: `gemini-1.5-flash-latest`).
-- Requests from Claude Code for model names containing **"sonnet"** or **"opus"** (e.g., `claude-3-sonnet-20240229`, `claude-3-opus-20240229`) are mapped to the Gemini model specified by your `BIG_MODEL` environment variable (default: `gemini-1.5-pro-latest`).
-- If Claude Code requests a full Gemini model name (e.g., `gemini/gemini-1.5-pro-latest`), the proxy will use that directly.
+- **"haiku"** requests → `SMALL_MODEL` (default: `gemini-1.5-flash-latest`)
+- **"sonnet"** or **"opus"** requests → `BIG_MODEL` (default: `gemini-1.5-pro-latest`)
+- **Direct model names** (e.g., `gemini/gemini-2.0-flash`) → Used directly
+- **Provider routing** based on `PREFERRED_PROVIDER` setting
 
-The server maintains a list of known Gemini models. If a recognized Gemini model is requested by the client without the `gemini/` prefix, the proxy will add it.
+### Available Models by Provider:
+
+**Gemini (Google AI Studio):**
+- `gemini-1.5-pro-latest`
+- `gemini-1.5-flash-latest`
+- `gemini-2.0-flash-exp`
+- `gemini-exp-1206`
+- And more...
+
+**Vertex AI:**
+- `gemini-2.5-pro-preview-03-25`
+- `gemini-2.0-flash`
+- `gemini-1.5-pro-preview-0514`
+- `gemini-1.5-flash-preview-0514`
+- And more...
 
 ## Endpoints
 
-- `POST /v1/messages`: The primary endpoint for Claude Code to send messages to Gemini. It's fully compatible with the Anthropic Messages API specification that Claude Code uses.
-- `POST /v1/messages/count_tokens`: Allows Claude Code to estimate the token count for a set of messages, using Gemini's tokenization.
-- `GET /health`: Returns the health status of the proxy, including API key configuration, streaming settings, and basic API key validation.
-- `GET /test-connection`: Performs a quick API call to Gemini to verify connectivity and that your `GEMINI_API_KEY` is working.
-- `GET /`: Root endpoint providing a welcome message, current configuration summary (models, limits), and available endpoints.
+- `POST /v1/messages`: Primary endpoint for Claude Code messages, fully compatible with Anthropic Messages API
+- `POST /v1/messages/count_tokens`: Token counting using Google's tokenization
+- `GET /health`: Comprehensive health status for both Gemini and Vertex AI configurations
+- `GET /test-connection`: Tests connectivity to all configured providers
+- `GET /`: Configuration summary and available endpoints
 
 ## Error Handling & Troubleshooting
+
+### Provider-Specific Issues
+
+**Gemini (Google AI Studio) Issues:**
+- **API Key**: Verify your key at [Google AI Studio](https://aistudio.google.com)
+- **Rate Limits**: Check quota limits in Google AI Studio console
+- **Model Access**: Ensure you have access to the requested models
+
+**Vertex AI Issues:**
+- **Project Setup**: Ensure Vertex AI API is enabled in your Google Cloud Project
+- **Authentication**: Verify service account permissions or ADC setup
+- **Location**: Confirm your `VERTEX_LOCATION` supports the requested models
+- **Billing**: Ensure your Google Cloud Project has billing enabled
 
 ### Common Issues and Solutions
 
 **Streaming Errors (malformed chunks):**
-- The proxy automatically handles malformed JSON chunks from Gemini
-- If streaming becomes unstable, set `FORCE_DISABLE_STREAMING=true` as a temporary fix
+- The proxy automatically handles malformed JSON chunks
 - Increase `MAX_STREAMING_RETRIES` for more resilient streaming
-
-**Gemini 500 Internal Server Errors:**
-- The proxy automatically retries with exponential backoff
-- These are temporary Gemini API issues that resolve automatically
-- Check `/health` endpoint to monitor API status
+- Set `FORCE_DISABLE_STREAMING=true` as a temporary fix
 
 **Connection Timeouts:**
-- Increase `REQUEST_TIMEOUT` if experiencing frequent timeouts
-- Check your internet connection and firewall settings
-- Use `/test-connection` endpoint to verify API connectivity
+- The proxy now includes automatic keep-alive pings every 30 seconds
+- Increase `REQUEST_TIMEOUT` for very long conversations
+- Check firewall settings for long-lived connections
 
-**Rate Limiting:**
-- Monitor your Google AI Studio quota in the Google Cloud Console
-- The proxy will provide specific rate limit guidance in error messages
+**Authentication Errors:**
+- **Gemini**: Verify `GEMINI_API_KEY` format (should start with `AIza`)
+- **Vertex AI**: Check service account permissions or run `gcloud auth application-default login`
 
 ### Emergency Mode
 
@@ -182,56 +259,80 @@ If you experience persistent issues:
 # Disable streaming temporarily
 export EMERGENCY_DISABLE_STREAMING=true
 
-# Or force disable all streaming
-export FORCE_DISABLE_STREAMING=true
+# Switch to fallback provider
+export PREFERRED_PROVIDER=gemini  # or vertex
+```
+
+### Diagnostic Commands
+
+```bash
+# Test all configured providers
+curl http://localhost:8082/test-connection
+
+# Check health status
+curl http://localhost:8082/health
+
+# View configuration
+curl http://localhost:8082/
 ```
 
 ## Logging
 
-The server provides detailed logs, which are especially useful for understanding how Claude Code requests are translated for Gemini and for monitoring error recovery. Logs are colorized in TTY environments for easier reading. Adjust verbosity with the `LOG_LEVEL` environment variable:
+The server provides detailed logs with provider-specific indicators:
 
+- 🟡 **Gemini operations** (Google AI Studio)
+- 🔵 **Vertex AI operations** (Google Cloud)
+- ⚠️ **Error recovery** and fallback notifications
+- ⏰ **Timeout handling** and keep-alive management
+
+Adjust verbosity with `LOG_LEVEL`:
 - `DEBUG`: Detailed request/response logging and error recovery steps
-- `INFO`: General operation logging
+- `INFO`: General operation logging with provider routing
 - `WARNING`: Error recovery and fallback notifications (recommended)
 - `ERROR`: Only errors and failures
-- `CRITICAL`: Only critical failures
 
-## The `CLAUDE.MD` File: Guiding Gemini for Claude Code
+## The `CLAUDE.md` File: Optimizing Google Models for Claude Code
 
-The `CLAUDE.MD` file included in this repository is critical for achieving the best experience when using this proxy with Claude Code and Gemini.
+The included `CLAUDE.md` file is essential for optimal performance:
 
 **Purpose:**
+- Tailors Google models to Claude Code's specific requirements
+- Improves tool reliability and code generation quality
+- Provides context about development environment and standards
+- Bridges differences between Anthropic and Google model behaviors
 
-- **Tailors Gemini to Claude Code's Needs**: Claude Code has specific ways it expects an LLM to behave, especially regarding tool use, file operations, and output formatting. `CLAUDE.MD` provides Gemini with explicit instructions on these expectations.
-- **Improves Tool Reliability**: By outlining how tools should be called and results interpreted, it helps Gemini make more effective use of Claude Code's capabilities.
-- **Enhances Code Generation & Understanding**: Gives Gemini context about the development environment and coding standards, leading to better code suggestions within Claude Code.
-- **Reduces Misinterpretations**: Helps bridge any gaps between how Anthropic models might interpret Claude Code directives versus how Gemini might.
-
-**How Claude Code Uses It:**
-
-When you run `claude` in a project directory, the Claude Code CLI automatically looks for a `CLAUDE.MD` file in that directory. If found, its contents are prepended to the system prompt for every request sent to the LLM (in this case, your Gemini proxy).
-
-**Recommendation:** Always copy the `CLAUDE.MD` from this proxy's repository into the root of any project where you intend to use Claude Code with this Gemini proxy. This ensures Gemini receives these vital instructions for every session.
+**Usage:**
+Claude Code automatically reads `CLAUDE.md` from your project directory and includes its content in the system prompt. Always copy this file to your project root for best results.
 
 ## Performance Tips
 
-- **Model Selection**: Use `gemini-1.5-flash-latest` for faster responses, `gemini-1.5-pro-latest` for more complex tasks
-- **Streaming**: Keep streaming enabled for better interactivity; the proxy handles errors automatically
-- **Timeouts**: Increase `REQUEST_TIMEOUT` for complex requests that need more processing time
-- **Retries**: Adjust `MAX_STREAMING_RETRIES` based on your network stability
+### Model Selection
+- **Fast responses**: Use `gemini-1.5-flash-latest` 
+- **Complex tasks**: Use `gemini-1.5-pro-latest`
+- **Latest features**: Try `gemini-2.0-flash-exp` or `gemini-exp-1206`
+
+### Provider Selection
+- **Individual use**: Google AI Studio (Gemini) for simplicity
+- **Enterprise use**: Vertex AI for enhanced security and compliance
+- **Hybrid approach**: Use both providers with intelligent fallback
+
+### Performance Optimization
+- **Streaming**: Keep enabled for better interactivity (automatic error recovery included)
+- **Timeouts**: Increase `REQUEST_TIMEOUT` for complex requests
+- **Retries**: Adjust `MAX_STREAMING_RETRIES` based on network stability
+- **Keep-alive**: Automatic 30-second pings prevent timeout issues
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Please submit them on the GitHub repository.
+Contributions, issues, and feature requests are welcome! 
 
 Areas where contributions are especially valuable:
-- Additional Gemini model support
+- Additional Google model support
+- Enhanced Vertex AI features
 - Performance optimizations
-- Enhanced error recovery strategies
-- Documentation improvements
+- Error recovery improvements
+- Documentation enhancements
 
 ## Thanks
 
-This project was heavily inspired by and builds upon the foundational work of the [claude-code-proxy by @1rgs](https://github.com/1rgs/claude-code-proxy). Their original proxy was instrumental in demonstrating the viability of such a bridge.
-
-Special thanks to the community for testing and feedback on error handling improvements.
+This project builds upon the foundational work of [claude-code-proxy by @1rgs](https://github.com/1rgs/claude-code-proxy). Special thanks to the community for testing and feedback on multi-provider support and timeout handling improvements.
