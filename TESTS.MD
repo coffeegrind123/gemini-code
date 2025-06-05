@@ -6,7 +6,7 @@ This comprehensive test suite validates all functionality of your Gemini-Vertex 
 
 1. **Install test dependencies:**
    ```bash
-   pip install -r requirements-test.txt
+   pip install -r requirements.txt
    ```
 
 2. **Start your proxy:**
