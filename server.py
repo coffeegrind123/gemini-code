@@ -53,15 +53,27 @@ class Constants:
     DELTA_TEXT = "text_delta"
     DELTA_INPUT_JSON = "input_json_delta"
 
-# Simple Configuration
+# Enhanced Configuration focused on Gemini and Vertex AI
 class Config:
     def __init__(self):
+        # Gemini configuration (required)
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY")
         if not self.gemini_api_key:
             raise ValueError("GEMINI_API_KEY not found in environment variables")
         
+        # Vertex AI configuration
+        self.vertex_project_id = os.environ.get("VERTEX_PROJECT_ID")
+        self.vertex_location = os.environ.get("VERTEX_LOCATION", "us-central1")
+        self.google_application_credentials = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        
+        # Model configuration
         self.big_model = os.environ.get("BIG_MODEL", "gemini-1.5-pro-latest")
         self.small_model = os.environ.get("SMALL_MODEL", "gemini-1.5-flash-latest")
+        
+        # Provider preference (gemini or vertex)
+        self.preferred_provider = os.environ.get("PREFERRED_PROVIDER", "gemini").lower()
+        
+        # Server configuration
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         self.log_level = os.environ.get("LOG_LEVEL", "WARNING")
@@ -75,6 +87,19 @@ class Config:
         self.max_streaming_retries = int(os.environ.get("MAX_STREAMING_RETRIES", "12"))
         self.force_disable_streaming = os.environ.get("FORCE_DISABLE_STREAMING", "false").lower() == "true"
         self.emergency_disable_streaming = os.environ.get("EMERGENCY_DISABLE_STREAMING", "false").lower() == "true"
+        
+        # Log Vertex AI configuration
+        if self.vertex_project_id:
+            print(f"🔵 Vertex AI Project ID configured: {self.vertex_project_id}")
+            print(f"🔵 Vertex AI Location configured: {self.vertex_location}")
+            if self.google_application_credentials:
+                print(f"🔵 Vertex AI using service account credentials from: {self.google_application_credentials}")
+            else:
+                print("🔵 Vertex AI will use Application Default Credentials (ADC)")
+        else:
+            print("⚠️ VERTEX_PROJECT_ID not set. Vertex AI models will not work correctly without it.")
+            
+        print(f"🔧 Preferred provider set to: {self.preferred_provider}")
         
     def validate_api_key(self):
         """Basic API key validation"""
@@ -96,10 +121,12 @@ except Exception as e:
 litellm.request_timeout = config.request_timeout
 litellm.num_retries = config.max_retries
 
-# Model Management
+# Model Management focused on Gemini and Vertex AI
 class ModelManager:
     def __init__(self, config):
         self.config = config
+        
+        # Base Gemini models (Google AI Studio)
         self.base_gemini_models = [
             "gemini-1.5-pro-latest",
             "gemini-1.5-pro-preview-0514",
@@ -111,8 +138,20 @@ class ModelManager:
             "gemini-2.0-flash-exp",
             "gemini-exp-1206"
         ]
+        
+        # Vertex AI models
+        self.vertex_ai_models = [
+            "gemini-2.5-pro-preview-03-25",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash-preview-0514",
+            "gemini-1.5-pro-preview-0514",
+            "gemini-2.5-flash-preview-04-17"
+        ]
+        
         self._gemini_models = set(self.base_gemini_models)
         self._add_env_models()
+        
+        print(f"🔵 Vertex AI models available: {', '.join(self.vertex_ai_models)}")
     
     def _add_env_models(self):
         for model in [self.config.big_model, self.config.small_model]:
@@ -128,10 +167,16 @@ class ModelManager:
         mapped_model = self._map_model_alias(clean_model)
         
         if mapped_model != clean_model:
-            return f"gemini/{mapped_model}", True
+            # Check which provider the mapped model should use
+            if self.config.preferred_provider == "vertex" and mapped_model in self.vertex_ai_models:
+                return f"vertex_ai/{mapped_model}", True
+            else:
+                return f"gemini/{mapped_model}", True
+        elif clean_model in self.vertex_ai_models and not original_model.startswith('vertex_ai/'):
+            return f"vertex_ai/{clean_model}", True
         elif clean_model in self._gemini_models:
             return f"gemini/{clean_model}", True
-        elif not original_model.startswith('gemini/'):
+        elif not original_model.startswith(('gemini/', 'vertex_ai/')):
             return f"gemini/{original_model}", False
         else:
             return original_model, False
@@ -139,10 +184,10 @@ class ModelManager:
     def _clean_model_name(self, model: str) -> str:
         if model.startswith('gemini/'):
             return model[7:]
+        elif model.startswith('vertex_ai/'):
+            return model[10:]
         elif model.startswith('anthropic/'):
             return model[10:]
-        elif model.startswith('openai/'):
-            return model[7:]
         return model
     
     def _map_model_alias(self, clean_model: str) -> str:
@@ -183,7 +228,7 @@ root_logger.addFilter(SimpleMessageFilter())
 for uvicorn_logger in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
     logging.getLogger(uvicorn_logger).setLevel(logging.WARNING)
 
-app = FastAPI(title="Gemini-to-Claude API Proxy", version="2.5.0")
+app = FastAPI(title="Gemini-Vertex AI Proxy", version="2.7.0")
 
 # Enhanced error classification
 def classify_gemini_error(error_msg: str) -> str:
@@ -207,11 +252,11 @@ def classify_gemini_error(error_msg: str) -> str:
     
     # Authentication issues
     elif "api key" in error_lower or "authentication" in error_lower or "unauthorized" in error_lower:
-        return "API key error. Please check that your GEMINI_API_KEY is valid and has the necessary permissions."
+        return "API key error. Please check that your API key is valid and has the necessary permissions."
     
     # Parsing/streaming issues
     elif "parsing" in error_lower or "json" in error_lower or "malformed" in error_lower:
-        return "Response parsing error. This is often a temporary Gemini API issue - please retry your request."
+        return "Response parsing error. This is often a temporary API issue - please retry your request."
     
     # Connection issues
     elif "connection" in error_lower or "timeout" in error_lower:
@@ -219,7 +264,7 @@ def classify_gemini_error(error_msg: str) -> str:
     
     # Safety/content filtering
     elif "safety" in error_lower or "content" in error_lower and "filter" in error_lower:
-        return "Content filtered by Gemini's safety systems. Please modify your request to comply with content policies."
+        return "Content filtered by safety systems. Please modify your request to comply with content policies."
     
     # Token/length issues
     elif "token" in error_lower and ("limit" in error_lower or "exceed" in error_lower):
@@ -228,11 +273,11 @@ def classify_gemini_error(error_msg: str) -> str:
     # Default: return original message
     return error_msg
 
-# Enhanced schema cleaner
+# Enhanced schema cleaner for Gemini/Vertex AI
 def clean_gemini_schema(schema: Any) -> Any:
-    """Recursively removes unsupported fields from a JSON schema for Gemini compatibility."""
+    """Recursively removes unsupported fields from a JSON schema for Gemini/Vertex compatibility."""
     if isinstance(schema, dict):
-        # Remove fields unsupported by Gemini
+        # Remove fields unsupported by Gemini/Vertex
         schema.pop("additionalProperties", None)
         schema.pop("default", None)
 
@@ -240,7 +285,7 @@ def clean_gemini_schema(schema: Any) -> Any:
         if schema.get("type") == "string" and "format" in schema:
             allowed_formats = {"enum", "date-time"}
             if schema["format"] not in allowed_formats:
-                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini schema")
+                logger.debug(f"Removing unsupported format '{schema['format']}' for string type in Gemini/Vertex schema")
                 schema.pop("format")
 
         # Recursively clean nested schemas
@@ -310,10 +355,16 @@ class MessagesRequest(BaseModel):
         original_model = v
         mapped_model, was_mapped = model_manager.validate_and_map_model(v)
         
-        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Big='{config.big_model}', Small='{config.small_model}'")
+        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Preferred='{config.preferred_provider}', Big='{config.big_model}', Small='{config.small_model}'")
         
         if was_mapped:
-            logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{mapped_model}'")
+            # Enhanced logging with provider-specific emojis
+            if mapped_model.startswith("vertex_ai/"):
+                logger.info(f"🔵 VERTEX MODEL MAPPING: '{original_model}' ➡️ '{mapped_model}'")
+            elif mapped_model.startswith("gemini/"):
+                logger.info(f"🟡 GEMINI MODEL MAPPING: '{original_model}' ➡️ '{mapped_model}'")
+            else:
+                logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{mapped_model}'")
         
         if info and hasattr(info, 'data') and isinstance(info.data, dict):
             info.data['original_model'] = original_model
@@ -397,7 +448,7 @@ def parse_tool_result_content(content):
 
 # Enhanced message conversion
 def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str, Any]:
-    """Convert Anthropic API request format to LiteLLM format for Gemini."""
+    """Convert Anthropic API request format to LiteLLM format."""
     litellm_messages = []
     
     # System message handling
@@ -522,6 +573,9 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         "max_tokens": min(anthropic_request.max_tokens, config.max_tokens_limit),
         "temperature": anthropic_request.temperature,
         "stream": anthropic_request.stream,
+        # Add timeout configuration for long conversations
+        "timeout": 600,  # 10 minutes
+        "request_timeout": 600,
     }
 
     # Add optional parameters
@@ -532,18 +586,23 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
     if anthropic_request.top_k is not None:
         litellm_request["topK"] = anthropic_request.top_k
 
-    # Add tools with schema cleaning
+    # Add tools with schema cleaning for Gemini/Vertex
     if anthropic_request.tools:
         valid_tools = []
+        is_gemini_vertex = anthropic_request.model.startswith(("gemini/", "vertex_ai/"))
+        
         for tool in anthropic_request.tools:
             if tool.name and tool.name.strip():
-                cleaned_schema = clean_gemini_schema(tool.input_schema)
+                input_schema = tool.input_schema
+                if is_gemini_vertex:
+                    input_schema = clean_gemini_schema(tool.input_schema)
+                    
                 valid_tools.append({
                     "type": Constants.TOOL_FUNCTION,
                     Constants.TOOL_FUNCTION: {
                         "name": tool.name,
                         "description": tool.description or "",
-                        "parameters": cleaned_schema
+                        "parameters": input_schema
                     }
                 })
         if valid_tools:
@@ -581,7 +640,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
 
 # Response conversion
 def convert_litellm_to_anthropic(litellm_response, original_request: MessagesRequest) -> MessagesResponse:
-    """Convert LiteLLM (Gemini) response back to Anthropic API format."""
+    """Convert LiteLLM response back to Anthropic API format."""
     try:
         # Extract response data safely
         response_id = f"msg_{uuid.uuid4()}"
@@ -701,9 +760,9 @@ def convert_litellm_to_anthropic(litellm_response, original_request: MessagesReq
             usage=Usage(input_tokens=0, output_tokens=0)
         )
 
-# Enhanced streaming handler with more robust error recovery
+# Enhanced streaming handler with timeout improvements
 async def handle_streaming_with_recovery(response_generator, original_request: MessagesRequest):
-    """Enhanced streaming handler with robust error recovery for malformed chunks."""
+    """Enhanced streaming handler with robust error recovery and timeout handling."""
     message_id = f"msg_{uuid.uuid4().hex[:24]}"
     
     # Send initial SSE events
@@ -724,10 +783,15 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
     
     # Enhanced error recovery tracking
     consecutive_errors = 0
-    max_consecutive_errors = 10  # Increased from 5
+    max_consecutive_errors = 10
     stream_terminated_early = False
     malformed_chunks_count = 0
-    max_malformed_chunks = 20  # Allow more malformed chunks before giving up
+    max_malformed_chunks = 20
+    
+    # Timeout handling
+    has_sent_stop_reason = False
+    last_ping = time.time()  # Track last ping time
+    PING_INTERVAL = 30  # Send ping every 30 seconds
     
     # Buffer for incomplete chunks
     chunk_buffer = ""
@@ -759,7 +823,7 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
             
         # Incomplete JSON structures
         if chunk_stripped.startswith('{') and not chunk_stripped.endswith('}'):
-            if len(chunk_stripped) < 15:  # Very short incomplete JSON
+            if len(chunk_stripped) < 15:
                 return True
                 
         if chunk_stripped.startswith('[') and not chunk_stripped.endswith(']'):
@@ -768,7 +832,7 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
         
         # Check for obviously broken JSON patterns
         if chunk_stripped.count('{') != chunk_stripped.count('}'):
-            if len(chunk_stripped) < 20:  # Only for short chunks
+            if len(chunk_stripped) < 20:
                 return True
                 
         if chunk_stripped.count('[') != chunk_stripped.count(']'):
@@ -812,6 +876,11 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
         
         while True:
             try:
+                # Send periodic keep-alive pings to prevent timeout
+                if time.time() - last_ping > PING_INTERVAL:
+                    yield f"event: {Constants.EVENT_PING}\ndata: {json.dumps({'type': Constants.EVENT_PING})}\n\n"
+                    last_ping = time.time()
+                
                 # Get next chunk with timeout
                 try:
                     chunk = await asyncio.wait_for(anext(stream_iterator), timeout=90.0)
@@ -824,6 +893,13 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                 
                 # Reset consecutive error counter on successful chunk retrieval
                 consecutive_errors = 0
+                
+                # Check if this is the end of the response with usage data
+                if hasattr(chunk, 'usage') and chunk.usage is not None:
+                    if hasattr(chunk.usage, 'prompt_tokens'):
+                        input_tokens = chunk.usage.prompt_tokens
+                    if hasattr(chunk.usage, 'completion_tokens'):
+                        output_tokens = chunk.usage.completion_tokens
                 
                 # Handle string chunks with enhanced validation
                 if isinstance(chunk, str):
@@ -873,7 +949,7 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                         logger.debug(f"Failed to parse chunk as JSON: {parse_error}")
                         continue
 
-                # Extract chunk data (your existing logic here)
+                # Extract chunk data
                 delta_content_text = None
                 delta_tool_calls = None
                 chunk_finish_reason = None
@@ -895,20 +971,12 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                         delta_tool_calls = delta.get("tool_calls")
                         chunk_finish_reason = choice.get("finish_reason")
 
-                if hasattr(chunk, 'usage') and chunk.usage:
-                    input_tokens = getattr(chunk.usage, 'prompt_tokens', 0)
-                    output_tokens = getattr(chunk.usage, 'completion_tokens', 0)
-                elif isinstance(chunk, dict) and "usage" in chunk:
-                    usage = chunk["usage"]
-                    input_tokens = usage.get("prompt_tokens", 0)
-                    output_tokens = usage.get("completion_tokens", 0)
-
                 # Handle text delta
                 if delta_content_text:
                     accumulated_text += delta_content_text
                     yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': delta_content_text}})}\n\n"
 
-                # Handle tool call deltas (your existing logic)
+                # Handle tool call deltas
                 if delta_tool_calls:
                     for tc_chunk in delta_tool_calls:
                         if not (hasattr(tc_chunk, 'function') and tc_chunk.function and 
@@ -934,7 +1002,8 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                             yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': current_tool_calls[tool_call_id]['index'], 'delta': {'type': Constants.DELTA_INPUT_JSON, 'partial_json': tc_chunk.function.arguments}})}\n\n"
 
                 # Handle finish reason
-                if chunk_finish_reason:
+                if chunk_finish_reason and not has_sent_stop_reason:
+                    has_sent_stop_reason = True
                     if chunk_finish_reason == "length":
                         final_stop_reason = Constants.STOP_MAX_TOKENS
                     elif chunk_finish_reason == "tool_calls":
@@ -963,14 +1032,14 @@ async def handle_streaming_with_recovery(response_generator, original_request: M
                 if ("Error parsing chunk" in error_msg and 
                     "Expecting property name enclosed in double quotes" in error_msg):
                     
-                    logger.warning(f"Gemini malformed chunk error (attempt {consecutive_errors}/{max_consecutive_errors})")
+                    logger.warning(f"API malformed chunk error (attempt {consecutive_errors}/{max_consecutive_errors})")
                     
                     if consecutive_errors >= max_consecutive_errors:
                         logger.error(f"Too many consecutive API errors ({consecutive_errors}), terminating stream")
                         stream_terminated_early = True
                         
                         # Send error info to client
-                        error_text = f"\n⚠️ Gemini streaming encountered repeated malformed chunks. This is a known API issue.\n"
+                        error_text = f"\n⚠️ Streaming encountered repeated malformed chunks. This is a known API issue.\n"
                         yield f"event: {Constants.EVENT_CONTENT_BLOCK_DELTA}\ndata: {json.dumps({'type': Constants.EVENT_CONTENT_BLOCK_DELTA, 'index': text_block_index, 'delta': {'type': Constants.DELTA_TEXT, 'text': error_text}})}\n\n"
                         break
                     
@@ -1030,7 +1099,7 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     return response
 
-# Enhanced streaming retry logic for the main endpoint
+# Enhanced main endpoint focused on Gemini/Vertex AI
 @app.post("/v1/messages")
 async def create_message(request: MessagesRequest, raw_request: Request):
     try:
@@ -1047,7 +1116,30 @@ async def create_message(request: MessagesRequest, raw_request: Request):
 
         # Convert request
         litellm_request = convert_anthropic_to_litellm(request)
-        litellm_request["api_key"] = config.gemini_api_key
+        
+        # Determine API key/credentials based on the final model's provider prefix
+        if request.model.startswith("gemini/"):
+            litellm_request["api_key"] = config.gemini_api_key
+            logger.debug(f"Using Gemini (Google AI Studio) API key for model: {request.model}")
+            
+        elif request.model.startswith("vertex_ai/"):
+            if config.vertex_project_id:
+                litellm_request["vertex_project"] = config.vertex_project_id
+                litellm_request["vertex_location"] = config.vertex_location
+                logger.info(f"🔵 Using Vertex AI credentials (Project: {config.vertex_project_id}, Location: {config.vertex_location}) for model: {request.model}")
+
+                # Check for Application Default Credentials or service account
+                if config.google_application_credentials:
+                    logger.info(f"🔵 Vertex AI using service account from: {config.google_application_credentials}")
+                else:
+                    logger.info("🔵 Vertex AI using Application Default Credentials (ADC)")
+            else:
+                raise HTTPException(status_code=400, detail="VERTEX_PROJECT_ID not set for Vertex AI model. Please configure VERTEX_PROJECT_ID environment variable.")
+                
+        else:
+            # Default fallback - use Gemini
+            litellm_request["api_key"] = config.gemini_api_key
+            logger.debug(f"Using default Gemini API key for model: {request.model}")
         
         # Log request details
         num_tools = len(request.tools) if request.tools else 0
@@ -1076,16 +1168,19 @@ async def create_message(request: MessagesRequest, raw_request: Request):
                     
                     response_generator = await litellm.acompletion(**litellm_request)
                     
+                    # Add streaming-specific headers to prevent buffering
+                    headers = {
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",  # Disable nginx buffering
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*"
+                    }
+                    
                     return StreamingResponse(
                         handle_streaming_with_recovery(response_generator, request),
                         media_type="text/event-stream",
-                        headers={
-                            "Cache-Control": "no-cache",
-                            "Connection": "keep-alive",
-                            "X-Accel-Buffering": "no",
-                            "Access-Control-Allow-Origin": "*",
-                            "Access-Control-Allow-Headers": "*"
-                        }
+                        headers=headers
                     )
                     
                 except (litellm.exceptions.APIConnectionError, RuntimeError) as streaming_error:
@@ -1097,10 +1192,10 @@ async def create_message(request: MessagesRequest, raw_request: Request):
                         "Expecting property name enclosed in double quotes" in error_msg):
                         
                         if streaming_retry_count <= max_retries:
-                            logger.warning(f"Gemini streaming chunk parsing error (attempt {streaming_retry_count}/{max_retries + 1}), retrying...")
+                            logger.warning(f"Streaming chunk parsing error (attempt {streaming_retry_count}/{max_retries + 1}), retrying...")
                             continue
                         else:
-                            logger.error(f"Gemini streaming failed after {max_retries + 1} attempts due to malformed chunks, falling back to non-streaming")
+                            logger.error(f"Streaming failed after {max_retries + 1} attempts due to malformed chunks, falling back to non-streaming")
                             break
                     else:
                         # Other streaming errors - could be connection issues
@@ -1129,7 +1224,15 @@ async def create_message(request: MessagesRequest, raw_request: Request):
         if not request.stream or litellm_request.get("stream") == False:
             start_time = time.time()
             litellm_response = await litellm.acompletion(**litellm_request)
-            logger.debug(f"✅ Response received: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
+            elapsed_time = time.time() - start_time
+            
+            # Enhanced provider-specific response logging
+            if request.model.startswith("vertex_ai/"):
+                logger.info(f"🔵 VERTEX RESPONSE RECEIVED: Model={request.model}, Time={elapsed_time:.2f}s")
+            elif request.model.startswith("gemini/"):
+                logger.info(f"🟡 GEMINI RESPONSE RECEIVED: Model={request.model}, Time={elapsed_time:.2f}s")
+            else:
+                logger.info(f"✅ RESPONSE RECEIVED: Model={request.model}, Time={elapsed_time:.2f}s")
             
             anthropic_response = convert_litellm_to_anthropic(litellm_response, request)
             return anthropic_response
@@ -1191,9 +1294,20 @@ async def health_check():
         health_status = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "version": "2.5.0",
-            "gemini_api_configured": bool(config.gemini_api_key),
-            "api_key_valid": config.validate_api_key(),
+            "version": "2.7.0",
+            "providers": {
+                "gemini": {
+                    "configured": bool(config.gemini_api_key),
+                    "api_key_valid": config.validate_api_key()
+                },
+                "vertex_ai": {
+                    "configured": bool(config.vertex_project_id),
+                    "project_id": config.vertex_project_id,
+                    "location": config.vertex_location,
+                    "credentials_type": "service_account" if config.google_application_credentials else "adc"
+                }
+            },
+            "preferred_provider": config.preferred_provider,
             "streaming_config": {
                 "force_disabled": config.force_disable_streaming,
                 "emergency_disabled": config.emergency_disable_streaming,
@@ -1216,68 +1330,92 @@ async def health_check():
 
 @app.get("/test-connection")
 async def test_connection():
-    """Test API connectivity to Gemini"""
+    """Test API connectivity to configured providers"""
     try:
-        # Simple test request to verify API connectivity
-        test_response = await litellm.acompletion(
-            model="gemini/gemini-1.5-flash-latest",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=5,
-            api_key=config.gemini_api_key
-        )
+        test_results = {}
+        
+        # Test Gemini
+        if config.gemini_api_key:
+            try:
+                test_response = await litellm.acompletion(
+                    model="gemini/gemini-1.5-flash-latest",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=5,
+                    api_key=config.gemini_api_key
+                )
+                test_results["gemini"] = {
+                    "status": "success",
+                    "model_used": "gemini-1.5-flash-latest",
+                    "response_id": getattr(test_response, 'id', 'unknown')
+                }
+            except Exception as e:
+                test_results["gemini"] = {
+                    "status": "failed",
+                    "error": classify_gemini_error(str(e))
+                }
+        
+        # Test Vertex AI
+        if config.vertex_project_id:
+            try:
+                test_response = await litellm.acompletion(
+                    model="vertex_ai/gemini-1.5-flash-preview-0514",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    max_tokens=5,
+                    vertex_project=config.vertex_project_id,
+                    vertex_location=config.vertex_location
+                )
+                test_results["vertex_ai"] = {
+                    "status": "success",
+                    "model_used": "gemini-1.5-flash-preview-0514",
+                    "project_id": config.vertex_project_id,
+                    "response_id": getattr(test_response, 'id', 'unknown')
+                }
+            except Exception as e:
+                test_results["vertex_ai"] = {
+                    "status": "failed",
+                    "error": str(e)
+                }
         
         return {
-            "status": "success",
-            "message": "Successfully connected to Gemini API",
-            "model_used": "gemini-1.5-flash-latest",
+            "status": "completed",
             "timestamp": datetime.now().isoformat(),
-            "response_id": getattr(test_response, 'id', 'unknown')
+            "test_results": test_results,
+            "suggestions": {
+                "gemini": "Check your GEMINI_API_KEY is valid",
+                "vertex_ai": "Ensure VERTEX_PROJECT_ID is set and ADC/service account is configured"
+            }
         }
         
-    except litellm.exceptions.APIError as e:
-        logger.error(f"API connectivity test failed: {e}")
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "failed",
-                "error_type": "API Error",
-                "message": classify_gemini_error(str(e)),
-                "timestamp": datetime.now().isoformat(),
-                "suggestions": [
-                    "Check your GEMINI_API_KEY is valid",
-                    "Verify your API key has the necessary permissions",
-                    "Check if you have reached rate limits"
-                ]
-            }
-        )
     except Exception as e:
         logger.error(f"Connection test failed: {e}")
         return JSONResponse(
             status_code=503,
             content={
                 "status": "failed",
-                "error_type": "Connection Error", 
-                "message": classify_gemini_error(str(e)),
-                "timestamp": datetime.now().isoformat(),
-                "suggestions": [
-                    "Check your internet connection",
-                    "Verify firewall settings allow HTTPS traffic",
-                    "Try again in a few moments"
-                ]
+                "error_type": "Test Error", 
+                "message": str(e),
+                "timestamp": datetime.now().isoformat()
             }
         )
 
 @app.get("/")
 async def root():
     return {
-        "message": f"Enhanced Gemini-to-Claude API Proxy v2.5.0",
+        "message": f"Gemini-Vertex AI Proxy v2.7.0",
         "status": "running",
         "config": {
+            "preferred_provider": config.preferred_provider,
             "big_model": config.big_model,
             "small_model": config.small_model,
-            "available_models": model_manager.gemini_models[:5],
+            "available_models": {
+                "gemini": model_manager.gemini_models[:5],
+                "vertex_ai": model_manager.vertex_ai_models[:5]
+            },
             "max_tokens_limit": config.max_tokens_limit,
-            "api_key_configured": bool(config.gemini_api_key),
+            "providers_configured": {
+                "gemini": bool(config.gemini_api_key),
+                "vertex_ai": bool(config.vertex_project_id)
+            },
             "streaming": {
                 "force_disabled": config.force_disable_streaming,
                 "emergency_disabled": config.emergency_disable_streaming,
@@ -1292,31 +1430,49 @@ async def root():
         }
     }
 
-# Simple logging utilities
+# Enhanced logging utilities
 class Colors:
-    CYAN = "\033[96m"
-    BLUE = "\033[94m" 
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    MAGENTA = "\033[95m"
+    CYAN = "\033[96m"    # Original model
+    BLUE = "\033[94m"    # Vertex AI
+    YELLOW = "\033[93m"  # Gemini
+    MAGENTA = "\033[95m" # Tools/Messages count
+    GREEN = "\033[92m"   # Success
+    RED = "\033[91m"     # Error
     RESET = "\033[0m"
     BOLD = "\033[1m"
 
 def log_request_beautifully(method: str, path: str, requested_model: str, 
-                           gemini_model_used: str, num_messages: int, 
+                           mapped_model: str, num_messages: int, 
                            num_tools: int, status_code: int):
     if not sys.stdout.isatty():
-        print(f"{method} {path} - {requested_model} -> {gemini_model_used} ({num_messages} messages, {num_tools} tools)")
+        print(f"{method} {path} - {requested_model} -> {mapped_model} ({num_messages} messages, {num_tools} tools)")
         return
     
     # Colorized logging for TTY
     req_display = f"{Colors.CYAN}{requested_model}{Colors.RESET}"
-    gemini_display = f"{Colors.GREEN}{gemini_model_used.replace('gemini/', '')}{Colors.RESET}"
+    
+    # Determine target provider and apply appropriate color
+    target_provider = "unknown"
+    target_model_name = mapped_model
+    target_color = Colors.YELLOW  # Default to Gemini color
+    
+    if "/" in mapped_model:
+        try:
+            target_provider, target_model_name = mapped_model.split("/", 1)
+            if target_provider == "gemini":
+                target_color = Colors.YELLOW
+            elif target_provider == "vertex_ai":
+                target_color = Colors.BLUE
+        except ValueError:
+            logger.warning(f"Could not parse provider from mapped model: {mapped_model}")
+            target_provider = "unknown"
+            target_model_name = mapped_model
+    
+    target_display = f"{target_color}{target_model_name}{Colors.RESET}"
     
     endpoint = path.split("?")[0] if "?" in path else path
     tools_str = f"{Colors.MAGENTA}{num_tools} tools{Colors.RESET}"
-    messages_str = f"{Colors.BLUE}{num_messages} messages{Colors.RESET}"
+    messages_str = f"{Colors.MAGENTA}{num_messages} messages{Colors.RESET}"
     
     if status_code == 200:
         status_str = f"{Colors.GREEN}✓ {status_code} OK{Colors.RESET}"
@@ -1324,7 +1480,7 @@ def log_request_beautifully(method: str, path: str, requested_model: str,
         status_str = f"{Colors.RED}✗ {status_code}{Colors.RESET}"
 
     log_line = f"{Colors.BOLD}{method} {endpoint}{Colors.RESET} {status_str}"
-    model_line = f"Request: {req_display} → Gemini: {gemini_display} ({tools_str}, {messages_str})"
+    model_line = f"{req_display} → {target_display} ({target_provider}) ({tools_str}, {messages_str})"
 
     print(log_line)
     print(model_line)
@@ -1334,13 +1490,13 @@ def validate_startup():
     """Validate configuration and connectivity on startup"""
     print("🔍 Validating startup configuration...")
     
-    # Check API key
+    # Check API keys
     if not config.gemini_api_key:
         print("🔴 FATAL: GEMINI_API_KEY is not set")
         return False
     
     if not config.validate_api_key():
-        print("⚠️ WARNING: API key format validation failed")
+        print("⚠️ WARNING: Gemini API key format validation failed")
     
     # Check network connectivity (basic)
     try:
@@ -1354,7 +1510,7 @@ def validate_startup():
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--help":
-        print("Enhanced Gemini-to-Claude API Proxy v2.5.0")
+        print("Gemini-Vertex AI Proxy v2.7.0")
         print("")
         print("Usage: uvicorn server:app --reload --host 0.0.0.0 --port 8082")
         print("")
@@ -1362,21 +1518,29 @@ def main():
         print("  GEMINI_API_KEY - Your Google Gemini API key")
         print("")
         print("Optional environment variables:")
+        print("  PREFERRED_PROVIDER - Preferred provider (gemini or vertex)")
+        print("  VERTEX_PROJECT_ID - Google Cloud Project ID for Vertex AI")
+        print("  VERTEX_LOCATION - Vertex AI location (default: us-central1)")
+        print("  GOOGLE_APPLICATION_CREDENTIALS - Path to service account JSON")
         print(f"  BIG_MODEL - Big model name (default: gemini-1.5-pro-latest)")
         print(f"  SMALL_MODEL - Small model name (default: gemini-1.5-flash-latest)")
         print(f"  HOST - Server host (default: 0.0.0.0)")
         print(f"  PORT - Server port (default: 8082)")
         print(f"  LOG_LEVEL - Logging level (default: WARNING)")
         print(f"  MAX_TOKENS_LIMIT - Token limit (default: 8192)")
-        print(f"  REQUEST_TIMEOUT - Request timeout in seconds (default: 60)")
+        print(f"  REQUEST_TIMEOUT - Request timeout in seconds (default: 90)")
         print(f"  MAX_RETRIES - Maximum retries (default: 2)")
-        print(f"  MAX_STREAMING_RETRIES - Maximum streaming retries (default: 2)")
+        print(f"  MAX_STREAMING_RETRIES - Maximum streaming retries (default: 12)")
         print(f"  FORCE_DISABLE_STREAMING - Force disable streaming (default: false)")
         print(f"  EMERGENCY_DISABLE_STREAMING - Emergency disable streaming (default: false)")
         print("")
-        print("Available Gemini models:")
+        print("Available models by provider:")
+        print("  Gemini:")
         for model in model_manager.gemini_models:
-            print(f"  - {model}")
+            print(f"    - {model}")
+        print("  Vertex AI:")
+        for model in model_manager.vertex_ai_models:
+            print(f"    - {model}")
         sys.exit(0)
 
     # Validate startup configuration
@@ -1385,11 +1549,13 @@ def main():
         sys.exit(1)
 
     # Configuration summary
-    print("🚀 Enhanced Gemini-to-Claude API Proxy v2.5.0")
+    print("🚀 Gemini-Vertex AI Proxy v2.7.0")
     print(f"✅ Configuration loaded successfully")
+    print(f"   Preferred Provider: {config.preferred_provider}")
     print(f"   Big Model: {config.big_model}")
     print(f"   Small Model: {config.small_model}")
-    print(f"   Available Models: {len(model_manager.gemini_models)}")
+    print(f"   Available Gemini Models: {len(model_manager.gemini_models)}")
+    print(f"   Available Vertex AI Models: {len(model_manager.vertex_ai_models)}")
     print(f"   Max Tokens Limit: {config.max_tokens_limit}")
     print(f"   Request Timeout: {config.request_timeout}s")
     print(f"   Max Retries: {config.max_retries}")
@@ -1400,12 +1566,15 @@ def main():
     print(f"   Server: {config.host}:{config.port}")
     print("")
 
-    # Start server
+    # Configure uvicorn to run with minimal logs and streaming timeouts
     uvicorn.run(
         app, 
         host=config.host, 
         port=config.port, 
-        log_level=config.log_level.lower()
+        log_level=config.log_level.lower(),
+        timeout_keep_alive=300,  # 5 minutes keep-alive for long conversations
+        timeout_graceful_shutdown=30,
+        limit_max_requests=1000
     )
 
 if __name__ == "__main__":
